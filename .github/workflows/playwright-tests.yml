@@ -19,6 +19,13 @@ jobs:
     name: playwright-tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy-pages.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
 
     env:
       CI: true
@@ -83,6 +90,56 @@ jobs:
               ]
             }]
           }' "${{ secrets.TEAMS_WEBHOOK_URL }}"
+
+      - name: Fetch previous history from gh-pages
+        if: always() && github.ref == 'refs/heads/main'
+        run: |
+          git fetch origin gh-pages 2>/dev/null || true
+          if git show origin/gh-pages:history.json > /tmp/prev-history.json 2>/dev/null; then
+            echo "Previous history found"
+          else
+            echo '[]' > /tmp/prev-history.json
+          fi
+
+      - name: Build and write history.json
+        if: always() && github.ref == 'refs/heads/main'
+        run: |
+          PREV=/tmp/prev-history.json
+          ENTRY=$(node -e "
+            const fs = require('fs');
+            const results = fs.existsSync('test-results/results.json')
+              ? JSON.parse(fs.readFileSync('test-results/results.json','utf8'))
+              : null;
+            const passed  = results?.stats?.expected  ?? 0;
+            const failed  = results?.stats?.unexpected ?? 0;
+            const skipped = results?.stats?.skipped    ?? 0;
+            console.log(JSON.stringify({
+              timestamp:   new Date().toISOString(),
+              run_url:     '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+              commit:      '${{ github.sha }}',
+              ref:         '${{ github.ref }}',
+              conclusion:  failed > 0 ? 'failure' : 'success',
+              passed, failed, skipped
+            }));
+          ")
+          node -e "
+            const fs = require('fs');
+            const prev = JSON.parse(fs.readFileSync('$PREV','utf8'));
+            const entry = JSON.parse(process.argv[1]);
+            prev.push(entry);
+            fs.writeFileSync('playwright-report/history.json', JSON.stringify(prev, null, 2));
+          " "$ENTRY"
+
+      - name: Upload Pages artifact
+        if: always() && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: playwright-report/
+
+      - name: Deploy to GitHub Pages
+        id: deploy-pages
+        if: always() && github.ref == 'refs/heads/main'
+        uses: actions/deploy-pages@v4
 
   security-scan:
     name: security-scan
