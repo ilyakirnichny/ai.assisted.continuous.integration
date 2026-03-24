@@ -47,3 +47,36 @@ With a working workflow in place, it was enhanced with Microsoft Teams failure n
 - Copilot correctly scoped the notification to `if: failure()` and placed it as the last step so it can catch failures from any earlier step.
 - Using a GitHub Secret for the webhook URL keeps sensitive data out of the repository.
 - The MessageCard format is a straightforward way to deliver structured notifications to Teams without requiring a third-party action.
+
+---
+
+## Practice 3 — Add Security Scanning and Test Analytics
+
+In this exercise, the workflow was extended with a dependency vulnerability scanner running in parallel and a test analytics dashboard published to GitHub Pages.
+
+### What was done
+
+**Security scanning (`security-scan` job)**
+
+- Added a new `security-scan` job that runs in parallel with `playwright-tests` (no `needs` dependency).
+- Uses `npm audit --audit-level=high` to detect high and critical severity vulnerabilities.
+- Set `continue-on-error: false` to ensure the job blocks the PR when vulnerabilities are found.
+- Writes a formatted vulnerability summary to `$GITHUB_STEP_SUMMARY` so results are visible directly in the GitHub Actions UI.
+- Reuses the same `ubuntu-latest` runner, `actions/setup-node@v4` with npm cache, and `npm ci` install pattern as the main job.
+
+**Test analytics / GitHub Pages (`playwright-tests` job)**
+
+- Added `pages: write` and `id-token: write` permissions at the job level.
+- Added an `environment: github-pages` block to surface the deployed URL in the Actions UI.
+- Added four publish steps at the end of the job, all gated with `if: always() && github.ref == 'refs/heads/main'` so they never block PRs:
+  - **Fetch previous history** — pulls `history.json` from the `gh-pages` branch (falls back to an empty array if the branch or file does not exist yet).
+  - **Build history.json** — reads `test-results/results.json`, extracts pass/fail/skip counts and run metadata (timestamp, run URL, commit SHA, ref, conclusion), appends a new record to the fetched history array using Node.js, and writes the result back into `playwright-report/`.
+  - **Upload Pages artifact** — packages `playwright-report/` using `actions/upload-pages-artifact@v3`.
+  - **Deploy to GitHub Pages** — publishes the report site using `actions/deploy-pages@v4`.
+
+### Key learnings
+
+- Placing the scan as a separate parallel job keeps the pipeline fast and concerns separated.
+- `npm audit --audit-level=high` is the correct flag for npm; the original prompt specified `yarn audit` which would have failed since the project uses npm.
+- Gating Pages deployment on `github.ref == 'refs/heads/main'` ensures PRs are not affected by the publish steps while still running them automatically on merge.
+- Using Node.js inline scripts to merge JSON is portable and avoids a `jq` dependency on the runner.
