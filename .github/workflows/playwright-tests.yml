@@ -65,7 +65,6 @@ jobs:
           path: test-results/**/trace*.zip
           retention-days: 30
 
-      # Notify Microsoft Teams on workflow failure
       - name: Notify Teams on failure
         if: failure()
         run: |
@@ -84,3 +83,42 @@ jobs:
               ]
             }]
           }' "${{ secrets.TEAMS_WEBHOOK_URL }}"
+
+  security-scan:
+    name: security-scan
+    runs-on: ubuntu-latest
+    continue-on-error: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run dependency vulnerability scan
+        id: audit
+        run: |
+          echo "## Dependency Vulnerability Scan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if npm audit --audit-level=high --json > audit-output.json 2>&1; then
+            echo "✅ No high or critical vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ High or critical vulnerabilities detected:" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat audit-output.json | node -e "
+              const data = JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+              const vulns = data.vulnerabilities || {};
+              const high = Object.values(vulns).filter(v => ['high','critical'].includes(v.severity));
+              high.forEach(v => console.log(v.severity.toUpperCase() + ': ' + v.name + ' - ' + (v.via?.[0]?.title || 'see details')));
+            " >> $GITHUB_STEP_SUMMARY 2>/dev/null || cat audit-output.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
